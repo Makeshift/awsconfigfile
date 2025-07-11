@@ -28,6 +28,7 @@ type Generator struct {
 	// PruneStartURLs is a slice of AWS SSO start URLs which profiles are being generated for.
 	// Existing profiles with these start URLs will be removed if they aren't found in the Profiles field.
 	PruneStartURLs []string
+	SessionName    string
 }
 
 // AddSource adds a new source to load profiles from to the generator.

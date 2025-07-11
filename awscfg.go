@@ -12,58 +12,88 @@ import (
 	"gopkg.in/ini.v1"
 )
 
-type SSOProfile struct {
-	// SSO details
+type SSOProfile interface {
+	ToIni(profileName string, nocredentialProcessProfile bool) any
+}
 
-	SSOStartURL string
-	SSORegion   string
-
-	// Account and role details
-	Region        string
-	AccountID     string
-	AccountName   string
-	RoleName      string
-	CommonFateURL string
-	// GeneratedFrom is the source that the profile
-	// was created from, such as 'commonfate' or 'aws-sso'
+type SSOSession struct {
+	SSOSessionName			    string
+	SSOStartURL             string
+	SSORegistrationScopes   string
+	SSORegion               string
 	GeneratedFrom string
 }
 
-// ToIni converts a profile to a struct with `ini` tags
-// ready to be written to an ini config file.
-//
-// if noCredentialProcess is true, the struct will contain sso_ parameters
-// like sso_role_name, sso_start_url, etc.
-//
-// if noCredentialProcess is false, the struct will contain granted_sso parameters
-// for use with the Granted credential process, like granted_sso_role_name,
-// granted_sso_start_url, and so forth.
-func (p SSOProfile) ToIni(profileName string, noCredentialProcess bool) any {
+type ssoSession struct {
+	SSOStartURL             string `ini:"sso_start_url"`
+	SSORegistrationScopes   string `ini:"sso_registration_scopes"`
+	SSORegion               string `ini:"sso_region"`
+	CommonFateGeneratedFrom string `ini:"common_fate_generated_from,omitempty"`
+}
+
+func (s *SSOSession) ToIni(profileName string, nocredentialProcessProfile bool) any {
+	return &ssoSession{
+		SSOStartURL:           s.SSOStartURL,
+		SSORegistrationScopes: s.SSORegistrationScopes,
+		SSORegion:             s.SSORegion,
+		CommonFateGeneratedFrom: s.GeneratedFrom,
+	}
+}
+
+type AccountProfile struct {
+	AccountName    string
+	SSOSessionName     string
+	AccountID   string
+	RoleName       string
+	GeneratedFrom  string
+	Region         string
+	CommonFateURL  string
+	// Legacy format used for credential process
+	SSOStartURL string
+	SSORegion   string
+}
+
+type credentialProcessProfile struct {
+	SSOStartURL             string `ini:"granted_sso_start_url"`
+	SSORegion               string `ini:"granted_sso_region,omitempty"`
+	AccountID            string `ini:"granted_sso_account_id"`
+	RoleName                string `ini:"granted_sso_role_name"`
+	CommonFateGeneratedFrom string `ini:"common_fate_generated_from"`
+	CredentialProcess       string `ini:"credential_process"`
+	Region                  string `ini:"region,omitempty"`
+}
+
+type regularProfile struct {
+	SSOSession              string `ini:"sso_session"`
+	AccountID            string `ini:"sso_account_id"`
+	CommonFateGeneratedFrom string `ini:"common_fate_generated_from"`
+	RoleName                string `ini:"sso_role_name"`
+	Region                  string `ini:"region,omitempty"`
+}
+
+func (a *AccountProfile) ToIni(profileName string, noCredentialProcess bool) any {
 	if noCredentialProcess {
 		return &regularProfile{
-			SSOStartURL:             p.SSOStartURL,
-			SSORegion:               p.SSORegion,
-			SSOAccountID:            p.AccountID,
-			SSORoleName:             p.RoleName,
-			CommonFateGeneratedFrom: p.GeneratedFrom,
-			Region:                  p.Region,
+				SSOSession:              a.SSOSessionName,
+				AccountID:            a.AccountID,
+				RoleName:                a.RoleName,
+				CommonFateGeneratedFrom: a.GeneratedFrom,
+				Region:                  a.Region,
 		}
 	}
-
 	credProcess := "granted credential-process --profile " + profileName
-
-	if p.CommonFateURL != "" {
-		credProcess += " --url " + p.CommonFateURL
+	if a.CommonFateURL != "" {
+		credProcess += " --url " + a.CommonFateURL
 	}
-
+	
 	return &credentialProcessProfile{
-		SSOStartURL:             p.SSOStartURL,
-		SSORegion:               p.SSORegion,
-		SSOAccountID:            p.AccountID,
-		SSORoleName:             p.RoleName,
+		SSOStartURL:             a.SSOStartURL,
+		SSORegion:               a.SSORegion,
+		AccountID:            a.AccountID,
+		RoleName:                a.RoleName,
 		CredentialProcess:       credProcess,
-		CommonFateGeneratedFrom: p.GeneratedFrom,
-		Region:                  p.Region,
+		CommonFateGeneratedFrom: a.GeneratedFrom,
+		Region:                  a.Region,
 	}
 }
 
@@ -82,11 +112,27 @@ func Merge(opts MergeOpts) error {
 	if opts.SectionNameTemplate == "" {
 		opts.SectionNameTemplate = "{{ .AccountName }}/{{ .RoleName }}"
 	}
+	
+	// Separate SSOSession and AccountProfile types
+	var ssoSessions []SSOSession
+	var accountProfiles []*AccountProfile
+	
+	for _, profile := range opts.Profiles {
+		switch p := profile.(type) {
+		case *SSOSession:
+			ssoSessions = append(ssoSessions, *p) // Store a copy of the session
+		case *AccountProfile:
+			accountProfiles = append(accountProfiles, p)
+		default:
+			return nil // Unsupported profile type, skip
+		}
+	}
+		
 
 	// Sort profiles by CombinedName (AccountName/RoleName)
-	sort.SliceStable(opts.Profiles, func(i, j int) bool {
-		combinedNameI := opts.Profiles[i].AccountName + "/" + opts.Profiles[i].RoleName
-		combinedNameJ := opts.Profiles[j].AccountName + "/" + opts.Profiles[j].RoleName
+	sort.SliceStable(accountProfiles, func(i, j int) bool {
+		combinedNameI := accountProfiles[i].AccountName + "/" + accountProfiles[i].RoleName
+		combinedNameJ := accountProfiles[j].AccountName + "/" + accountProfiles[j].RoleName
 		return combinedNameI < combinedNameJ
 	})
 
@@ -114,11 +160,28 @@ func Merge(opts MergeOpts) error {
 			}
 		}
 	}
+	
+	for _, ssoSession := range ssoSessions {
+		ssoSession.SSOSessionName = normalizeAccountName(ssoSession.SSOSessionName)
 
-	for _, ssoProfile := range opts.Profiles {
-		ssoProfile.AccountName = normalizeAccountName(ssoProfile.AccountName)
+		sectionName := "sso-session " + ssoSession.SSOSessionName
+		
+		opts.Config.DeleteSection(sectionName)
+		section, err := opts.Config.NewSection(sectionName)
+		if err != nil {
+			return err
+		}
+		entry := ssoSession.ToIni(ssoSession.SSOSessionName, opts.NoCredentialProcess)
+		err = section.ReflectFrom(entry)
+		if err != nil {
+			return err
+		}
+	}
+
+	for _, accountProfile := range accountProfiles {
+		accountProfile.AccountName = normalizeAccountName(accountProfile.AccountName)
 		sectionNameBuffer := bytes.NewBufferString("")
-		err := sectionNameTempl.Execute(sectionNameBuffer, ssoProfile)
+		err := sectionNameTempl.Execute(sectionNameBuffer, accountProfile)
 		if err != nil {
 			return err
 		}
@@ -131,7 +194,7 @@ func Merge(opts MergeOpts) error {
 			return err
 		}
 
-		entry := ssoProfile.ToIni(profileName, opts.NoCredentialProcess)
+		entry := accountProfile.ToIni(profileName, opts.NoCredentialProcess)
 		err = section.ReflectFrom(entry)
 		if err != nil {
 			return err
@@ -142,24 +205,6 @@ func Merge(opts MergeOpts) error {
 	return nil
 }
 
-type credentialProcessProfile struct {
-	SSOStartURL             string `ini:"granted_sso_start_url"`
-	SSORegion               string `ini:"granted_sso_region"`
-	SSOAccountID            string `ini:"granted_sso_account_id"`
-	SSORoleName             string `ini:"granted_sso_role_name"`
-	CommonFateGeneratedFrom string `ini:"common_fate_generated_from"`
-	CredentialProcess       string `ini:"credential_process"`
-	Region                  string `ini:"region,omitempty"`
-}
-
-type regularProfile struct {
-	SSOStartURL             string `ini:"sso_start_url"`
-	SSORegion               string `ini:"sso_region"`
-	SSOAccountID            string `ini:"sso_account_id"`
-	CommonFateGeneratedFrom string `ini:"common_fate_generated_from"`
-	SSORoleName             string `ini:"sso_role_name"`
-	Region                  string `ini:"region,omitempty"`
-}
 
 func normalizeAccountName(accountName string) string {
 	return strings.ReplaceAll(accountName, " ", "-")
