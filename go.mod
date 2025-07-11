@@ -1,4 +1,4 @@
-module github.com/common-fate/awsconfigfile
+module github.com/makeshift/awsconfigfile
 
 go 1.19
 
