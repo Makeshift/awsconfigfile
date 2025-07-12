@@ -113,6 +113,7 @@ type MergeOpts struct {
 	SSOScopes			[]string
 	PreferRoles		[]string
 	Verbose 			bool
+	DefaultRegion string
 }
 
 func Merge(opts MergeOpts) error {
@@ -258,6 +259,11 @@ func Merge(opts MergeOpts) error {
 		if err != nil {
 			return err
 		}
+		
+		if accountProfile.Region == "" && opts.DefaultRegion != "" {
+			accountProfile.Region = opts.DefaultRegion
+		}
+		
 		profileName := opts.Prefix + sectionNameBuffer.String()
 		sectionName := "profile " + profileName
 		

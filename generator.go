@@ -32,6 +32,7 @@ type Generator struct {
 	SSOScopes      []string
 	PreferRoles    []string
 	Verbose 			bool
+	DefaultRegion string
 }
 
 // AddSource adds a new source to load profiles from to the generator.
@@ -103,6 +104,7 @@ func (g *Generator) Generate(ctx context.Context) error {
 		SSOScopes: 				   g.SSOScopes,
 		PreferRoles:         g.PreferRoles,
 		Verbose:             g.Verbose,
+		DefaultRegion:       g.DefaultRegion,
 	})
 	return err
 }
